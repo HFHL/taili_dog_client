@@ -1,0 +1,413 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Robot Control Interface</title>
+    <script src="https://cdn.jsdelivr.net/npm/axios/dist/axios.min.js"></script>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 20px;
+            background-color: #f0f0f0;
+        }
+        
+        .container {
+            display: flex;
+            gap: 20px;
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+        
+        .video-container {
+            flex: 2;
+            background: #fff;
+            padding: 15px;
+            border-radius: 10px;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+        }
+        
+        .controls-container {
+            flex: 1;
+            background: #fff;
+            padding: 15px;
+            border-radius: 10px;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+        }
+        
+        .video-feed {
+            width: 100%;
+            border-radius: 5px;
+        }
+        
+        .button-grid {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 10px;
+            margin-top: 20px;
+        }
+        
+        .action-buttons {
+            display: flex;
+            gap: 10px;
+            margin-top: 20px;
+            justify-content: center;
+        }
+        
+        .control-button {
+            padding: 15px;
+            font-size: 16px;
+            border: none;
+            border-radius: 5px;
+            background-color: #007bff;
+            color: white;
+            cursor: pointer;
+            transition: background-color 0.2s;
+        }
+        
+        .control-button:hover {
+            background-color: #0056b3;
+        }
+        
+        .control-button:active {
+            background-color: #004085;
+        }
+        
+        .control-button.pressed {
+            background-color: #004085;
+        }
+        
+        .action-button {
+            padding: 15px;
+            font-size: 16px;
+            border: none;
+            border-radius: 5px;
+            background-color: #28a745;
+            color: white;
+            cursor: pointer;
+            transition: background-color 0.2s;
+            flex: 1;
+        }
+        
+        .action-button:hover {
+            background-color: #218838;
+        }
+        
+        .action-button:active, .action-button.pressed {
+            background-color: #1e7e34;
+        }
+        
+        .status-panel {
+            margin-top: 20px;
+            padding: 10px;
+            background-color: #f8f9fa;
+            border-radius: 5px;
+        }
+        
+        .status-text {
+            margin: 5px 0;
+            font-size: 14px;
+        }
+        
+        .connection-button {
+            width: 100%;
+            padding: 10px;
+            margin-top: 10px;
+            font-size: 16px;
+            border: none;
+            border-radius: 5px;
+            background-color: #28a745;
+            color: white;
+            cursor: pointer;
+        }
+        
+        .connection-button.disconnected {
+            background-color: #dc3545;
+        }
+        
+        .connection-status {
+            display: inline-block;
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            margin-right: 5px;
+        }
+        
+        .connection-status.connected {
+            background-color: #28a745;
+        }
+        
+        .connection-status.disconnected {
+            background-color: #dc3545;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="video-container">
+            <img src="/video_feed" alt="Video Feed" class="video-feed">
+        </div>
+        
+        <div class="controls-container">
+            <button id="connectionButton" class="connection-button disconnected">
+                Connect to Robot
+            </button>
+            
+            <div class="button-grid">
+                <button class="control-button" id="turnLeft">⟲</button>
+                <button class="control-button" id="forward">↑</button>
+                <button class="control-button" id="turnRight">⟳</button>
+                <button class="control-button" id="left">←</button>
+                <button class="control-button" id="stop">■</button>
+                <button class="control-button" id="right">→</button>
+                <div></div>
+                <button class="control-button" id="backward">↓</button>
+                <div></div>
+            </div>
+
+            <div class="action-buttons">
+                <button class="action-button" id="standUp">Stand</button>
+                <button class="action-button" id="sitDown">Sit</button>
+            </div>
+            
+            <div class="status-panel">
+                <div class="status-text">
+                    <span class="connection-status disconnected"></span>
+                    Status: <span id="connectionStatus">Disconnected</span>
+                </div>
+                <div class="status-text">
+                    Last Command: <span id="lastCommand">None</span>
+                </div>
+                <div class="status-text">
+                    Last Command Time: <span id="lastCommandTime">None</span>
+                </div>
+                <div class="status-text">
+                    Total Commands: <span id="totalCommands">0</span>
+                </div>
+                <div class="status-text">
+                    Failed Commands: <span id="failedCommands">0</span>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Command mapping
+        const COMMANDS = {
+            'forward': 'forward',
+            'backward': 'backward',
+            'left': 'left',
+            'right': 'right',
+            'turnLeft': 'turn_left',
+            'turnRight': 'turn_right',
+            'stop': 'stop',
+            'standUp': 'stand_up',
+            'sitDown': 'sit_down'
+        };
+        
+        // Global variables
+        let isConnected = false;
+        let statusUpdateInterval = null;
+        let commandInterval = null;
+        let currentCommand = null;
+        
+        // UI Elements
+        const connectionButton = document.getElementById('connectionButton');
+        const connectionStatus = document.querySelector('.connection-status');
+        const connectionStatusText = document.getElementById('connectionStatus');
+        const lastCommandText = document.getElementById('lastCommand');
+        const lastCommandTimeText = document.getElementById('lastCommandTime');
+        const totalCommandsText = document.getElementById('totalCommands');
+        const failedCommandsText = document.getElementById('failedCommands');
+        
+        // Helper functions
+        function updateUI(status) {
+            isConnected = status.connected;
+            
+            // Update connection button and status
+            connectionButton.textContent = isConnected ? 'Disconnect' : 'Connect to Robot';
+            connectionButton.classList.toggle('disconnected', !isConnected);
+            connectionStatus.classList.toggle('connected', isConnected);
+            connectionStatus.classList.toggle('disconnected', !isConnected);
+            connectionStatusText.textContent = isConnected ? 'Connected' : 'Disconnected';
+            
+            // Update status panel
+            lastCommandText.textContent = status.last_command || 'None';
+            lastCommandTimeText.textContent = status.last_command_time || 'None';
+            totalCommandsText.textContent = status.total_commands;
+            failedCommandsText.textContent = status.failed_commands;
+        }
+        
+        async function sendCommand(command, buttonId = null) {
+            try {
+                console.log(`Sending command: ${command}`);
+                const response = await axios.post('/api/command', {
+                    command: command,
+                    button_id: buttonId,
+                    timestamp: new Date().toISOString()
+                });
+                
+                console.log('Command response:', response.data);
+                if (response.data.status_info) {
+                    updateUI(response.data.status_info);
+                }
+                
+                return response.data.status === 'success';
+            } catch (error) {
+                console.error('Error sending command:', error);
+                return false;
+            }
+        }
+
+        async function startContinuousCommand(command, buttonId) {
+            if (!isConnected) return;
+            
+            currentCommand = command;
+            console.log(`Starting continuous command: ${command}`);
+            
+            // 立即发送一次命令
+            await sendCommand(command, buttonId);
+            
+            // 设置定时器持续发送命令
+            commandInterval = setInterval(async () => {
+                if (isConnected && currentCommand) {
+                    await sendCommand(command, buttonId);
+                }
+            }, 100); // 每100ms发送一次命令
+        }
+
+        async function stopContinuousCommand(buttonId) {
+            // 清除定时器
+            if (commandInterval) {
+                clearInterval(commandInterval);
+                commandInterval = null;
+            }
+            
+            // 发送停止命令
+            if (currentCommand) {
+                currentCommand = null;
+                await sendCommand('stop', buttonId);
+            }
+        }
+        
+        async function updateStatus() {
+            try {
+                const response = await axios.get('/api/status');
+                if (response.data) {
+                    updateUI(response.data);
+                }
+            } catch (error) {
+                console.error('Error updating status:', error);
+            }
+        }
+        
+        // Event Listeners
+        connectionButton.addEventListener('click', async () => {
+            const command = isConnected ? 'disconnect' : 'connect';
+            const success = await sendCommand(command);
+            
+            if (success) {
+                if (isConnected) {
+                    if (statusUpdateInterval) {
+                        clearInterval(statusUpdateInterval);
+                        statusUpdateInterval = null;
+                    }
+                } else {
+                    statusUpdateInterval = setInterval(updateStatus, 1000);
+                }
+            }
+        });
+        
+        // Setup control buttons
+        Object.entries(COMMANDS).forEach(([buttonId, command]) => {
+            const button = document.getElementById(buttonId);
+            if (button) {
+                if (['standUp', 'sitDown', 'stop'].includes(buttonId)) {
+                    // 单击按钮：起立、坐下、停止
+                    button.addEventListener('click', async () => {
+                        if (isConnected) {
+                            button.classList.add('pressed');
+                            await sendCommand(command, buttonId);
+                            setTimeout(() => button.classList.remove('pressed'), 200);
+                        }
+                    });
+                } else {
+                    // 持续命令按钮
+                    button.addEventListener('mousedown', async () => {
+                        if (isConnected && buttonId !== 'stop') {
+                            button.classList.add('pressed');
+                            await startContinuousCommand(command, buttonId);
+                        }
+                    });
+                    
+                    button.addEventListener('mouseup', async () => {
+                        if (isConnected && buttonId !== 'stop') {
+                            button.classList.remove('pressed');
+                            await stopContinuousCommand(buttonId);
+                        }
+                    });
+                    
+                    button.addEventListener('mouseleave', async () => {
+                        if (isConnected && buttonId !== 'stop' && button.classList.contains('pressed')) {
+                            button.classList.remove('pressed');
+                            await stopContinuousCommand(buttonId);
+                        }
+                    });
+
+                    // 触摸事件
+                    button.addEventListener('touchstart', async (e) => {
+                        e.preventDefault(); // 防止触摸事件的默认行为
+                        if (isConnected && buttonId !== 'stop') {
+                            button.classList.add('pressed');
+                            await startContinuousCommand(command, buttonId);
+                        }
+                    });
+                    
+                    button.addEventListener('touchend', async (e) => {
+                        e.preventDefault();
+                        if (isConnected && buttonId !== 'stop') {
+                            button.classList.remove('pressed');
+                            await stopContinuousCommand(buttonId);
+                        }
+                    });
+                }
+            }
+        });
+        
+        // Keyboard controls
+        document.addEventListener('keydown', async (event) => {
+            if (isConnected && !event.repeat) {
+                const buttonId = Object.entries(COMMANDS).find(([_, cmd]) => cmd === event.key)?.[0];
+                if (buttonId && buttonId !== 'stop') {
+                    const button = document.getElementById(buttonId);
+                    if (button) {
+                        button.classList.add('pressed');
+                        await startContinuousCommand(event.key, buttonId);
+                    }
+                } else if (event.key === 'x') { // 停止键
+                    const button = document.getElementById('stop');
+                    if (button) {
+                        button.classList.add('pressed');
+                        await sendCommand('stop', 'stop');
+                        setTimeout(() => button.classList.remove('pressed'), 200);
+                    }
+                }
+            }
+        });
+        
+        document.addEventListener('keyup', async (event) => {
+            const buttonId = Object.entries(COMMANDS).find(([_, cmd]) => cmd === event.key)?.[0];
+            if (buttonId && buttonId !== 'stop') {
+                const button = document.getElementById(buttonId);
+                if (button) {
+                    button.classList.remove('pressed');
+                    await stopContinuousCommand(buttonId);
+                }
+            }
+        });
+        
+        // Initial status update
+        updateStatus();
+    </script>
+</body>
+</html>
