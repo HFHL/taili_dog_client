@@ -65,22 +65,84 @@ def connect_to_robot():
     """连接到机器人"""
     global robot_socket
     try:
-        print_flush(f"Attempting to connect to robot at {SERVER_IP}:{SERVER_PORT}")
-        robot_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        robot_socket.settimeout(5)
-        robot_socket.connect((SERVER_IP, SERVER_PORT))
+        logging.info(f"Attempting to connect to robot at {SERVER_IP}:{SERVER_PORT}")
+        
+        # 检查IP地址格式
+        try:
+            socket.inet_aton(SERVER_IP)
+        except socket.error:
+            logging.error(f"Invalid IP address format: {SERVER_IP}")
+            raise ValueError(f"Invalid IP address: {SERVER_IP}")
+
+        # 检查端口范围
+        if not (0 <= SERVER_PORT <= 65535):
+            logging.error(f"Invalid port number: {SERVER_PORT}")
+            raise ValueError(f"Port number must be between 0 and 65535")
+
+        # 创建socket
+        try:
+            robot_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            logging.info("Socket created successfully")
+        except socket.error as se:
+            logging.error(f"Failed to create socket: {str(se)}")
+            raise
+
+        # 设置socket选项
+        try:
+            robot_socket.settimeout(5)
+            # 设置keep-alive
+            robot_socket.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
+            # 设置非阻塞模式
+            robot_socket.setblocking(True)
+        except socket.error as se:
+            logging.error(f"Failed to set socket options: {str(se)}")
+            raise
+
+        # 尝试连接
+        try:
+            robot_socket.connect((SERVER_IP, SERVER_PORT))
+        except socket.timeout:
+            logging.error("Connection attempt timed out")
+            raise TimeoutError("Connection timed out - server may be down or unreachable")
+        except ConnectionRefusedError:
+            logging.error("Connection refused by server")
+            raise ConnectionRefusedError("Server actively refused connection - check if server is running and port is correct")
+        except PermissionError as pe:
+            logging.error(f"Permission denied: {str(pe)}")
+            raise PermissionError("Permission denied - try running as administrator")
+        except socket.gaierror as ge:
+            logging.error(f"Address-related error: {str(ge)}")
+            raise
+        except socket.error as se:
+            logging.error(f"Socket error during connect: {str(se)}")
+            raise
+
+        # 连接成功后的设置
         robot_socket.settimeout(None)
-        print_flush("Successfully connected to robot")
+        logging.info("Successfully connected to robot")
+        
+        # 测试连接是否真正建立
+        try:
+            robot_socket.getpeername()
+            logging.info("Connection verified")
+        except socket.error:
+            logging.error("Connection verification failed")
+            raise ConnectionError("Connection appeared to succeed but verification failed")
+
         update_status('connect', True)
         return True
+
     except Exception as e:
-        print_flush(f"Failed to connect to robot: {str(e)}")
+        logging.error(f"Connection failed: {str(e)}")
         if robot_socket:
             try:
                 robot_socket.close()
-            except:
-                pass
-            robot_socket = None
+                logging.info("Socket closed after error")
+            except Exception as close_error:
+                logging.error(f"Error while closing socket: {str(close_error)}")
+            finally:
+                robot_socket = None
+        
         update_status('connect', False)
         return False
 
@@ -89,26 +151,58 @@ def send_robot_command(command):
     global robot_socket
     try:
         if not robot_socket:
-            print_flush("No connection to robot")
+            logging.error("No connection to robot")
             update_status(command, False)
             return False
+
+        if not isinstance(command, str):
+            logging.error(f"Invalid command type: {type(command)}, expected string")
+            raise TypeError("Command must be a string")
             
-        print_flush(f"Sending command: {command}")
+        logging.info(f"Sending command: {command}")
+        
+        # 确保命令格式正确
+        if not command.strip():
+            logging.error("Empty command")
+            raise ValueError("Command cannot be empty")
+            
         if not command.endswith('\n'):
             command = command + '\n'
         
-        robot_socket.sendall(command.encode('utf-8'))
-        print_flush("Command sent successfully")
+        # 尝试发送命令
+        try:
+            bytes_sent = robot_socket.sendall(command.encode('utf-8'))
+            logging.info(f"Command sent successfully: {command.strip()}")
+        except UnicodeEncodeError as ue:
+            logging.error(f"Command encoding error: {str(ue)}")
+            raise
+        except socket.timeout:
+            logging.error("Send timeout")
+            raise TimeoutError("Send operation timed out")
+        except ConnectionResetError:
+            logging.error("Connection reset by peer")
+            raise ConnectionResetError("Connection was reset - server may have closed connection")
+        except BrokenPipeError:
+            logging.error("Broken pipe")
+            raise BrokenPipeError("Connection broken - server may have closed connection")
+        except socket.error as se:
+            logging.error(f"Socket error while sending: {str(se)}")
+            raise
+
         update_status(command, True)
         return True
+
     except Exception as e:
-        print_flush(f"Failed to send command: {str(e)}")
+        logging.error(f"Failed to send command: {str(e)}")
         if robot_socket:
             try:
                 robot_socket.close()
-            except:
-                pass
-            robot_socket = None
+                logging.info("Socket closed after send error")
+            except Exception as close_error:
+                logging.error(f"Error while closing socket: {str(close_error)}")
+            finally:
+                robot_socket = None
+        
         update_status(command, False)
         return False
 
@@ -141,7 +235,7 @@ def generate_frames():
                                 yield (b'--frame\r\n'
                                       b'Content-Type: image/jpeg\r\n\r\n' + frame + b'\r\n')
     except Exception as e:
-        print_flush(f"Video stream error: {str(e)}")
+        logging.error(f"Video stream error: {str(e)}")
     finally:
         running = False
 
@@ -170,11 +264,11 @@ def handle_command():
         button_id = data.get('button_id')
         timestamp = data.get('timestamp')
 
-        print_flush(f"\n[Command Request] {'-'*50}")
-        print_flush(f"Command: {command}")
-        print_flush(f"Button: {button_id}")
-        print_flush(f"Time: {timestamp}")
-        print_flush(f"{'='*60}\n")
+        logging.info(f"\n[Command Request] {'-'*50}")
+        logging.info(f"Command: {command}")
+        logging.info(f"Button: {button_id}")
+        logging.info(f"Time: {timestamp}")
+        logging.info(f"{'='*60}\n")
         
         if command == 'connect':
             success = connect_to_robot()
@@ -188,7 +282,7 @@ def handle_command():
                 try:
                     robot_socket.close()
                 except Exception as e:
-                    print_flush(f"Error closing connection: {str(e)}")
+                    logging.error(f"Error closing connection: {str(e)}")
                 robot_socket = None
             return jsonify({
                 'status': 'success',
@@ -211,7 +305,7 @@ def handle_command():
             
     except Exception as e:
         error_msg = str(e)
-        print_flush(f"Error handling command: {error_msg}")
+        logging.error(f"Error handling command: {error_msg}")
         return jsonify({
             'status': 'error',
             'message': error_msg,
@@ -219,9 +313,9 @@ def handle_command():
         })
 
 if __name__ == '__main__':
-    print_flush("\nStarting Robot Control Server...")
-    print_flush(f"Server IP: {SERVER_IP}")
-    print_flush(f"Robot Control Port: {SERVER_PORT}")
-    print_flush(f"Video Stream Port: {VIDEO_PORT}")
-    print_flush("\nWaiting for connections...\n")
+    logging.info("\nStarting Robot Control Server...")
+    logging.info(f"Server IP: {SERVER_IP}")
+    logging.info(f"Robot Control Port: {SERVER_PORT}")
+    logging.info(f"Video Stream Port: {VIDEO_PORT}")
+    logging.info("\nWaiting for connections...\n")
     app.run(host='127.0.0.1', port=5000, debug=True)
